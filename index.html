@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Online Bus Pass System</title>
+
+  <!-- Tailwind CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- html2canvas to capture pass as PNG -->
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+
+  <!-- Firebase (modular) -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+    import { getDatabase, ref, set, update, remove, get, child, onValue } 
+      from "https://www.gstatic.com/firebasejs/11.0.1/firebase-database.js";
+
+    // --------------------------------------------------
+    // 🔥 PASTE YOUR REALTIME FIREBASE CONFIG HERE
+    // --------------------------------------------------
+    const firebaseConfig = {
+      apiKey: "AIzaSyA6xbGUg8A97-Bvs7yK7SOs9WMASeShmVA",
+  authDomain: "nothing2-ccfdc.firebaseapp.com",
+  databaseURL: "https://nothing2-ccfdc-default-rtdb.firebaseio.com",
+  projectId: "nothing2-ccfdc",
+  storageBucket: "nothing2-ccfdc.firebasestorage.app",
+  messagingSenderId: "26795199212",
+  appId: "1:26795199212:web:35389834d4c44a018533c9",
+  measurementId: "G-N0DYPHNNSL"
+    };
+    // --------------------------------------------------
+
+    // Initialize Firebase
+    const app = initializeApp(firebaseConfig);
+    window.db = getDatabase(app);
+
+    console.log("Firebase initialized");
+
+    // ---------- UI PAGE SWITCH ----------
+    function showPage(pageId) {
+      document.querySelectorAll(".page").forEach(p => p.classList.add("hidden"));
+      document.getElementById(pageId).classList.remove("hidden");
+    }
+    window.showPage = showPage;
+
+    // ---------- ADMIN LOGIN ----------
+    window.adminLogin = function() {
+      const user = document.getElementById("adminUser").value.trim();
+      const pass = document.getElementById("adminPass").value.trim();
+      if (user === "admin" && pass === "123") {
+        showPage("adminPanel");
+        loadEmployeeTable();
+        // clear
+        document.getElementById("adminUser").value = "";
+        document.getElementById("adminPass").value = "";
+      } else {
+        alert("Invalid admin credentials");
+      }
+    };
+
+    // ---------- ADD / UPDATE EMPLOYEE ----------
+    let editMode = false;
+    let editCodeOriginal = null;
+
+    window.saveEmployee = function() {
+      const code = document.getElementById("empCode").value.trim();
+      const name = document.getElementById("empName").value.trim();
+      const dept = document.getElementById("empDept").value.trim();
+      const route = document.getElementById("empRoute").value.trim();
+      const stop = document.getElementById("empStop").value.trim();
+      const pass = document.getElementById("empPassword").value.trim();
+      const link = document.getElementById("empLink").value.trim();
+
+      if (!code) return alert("Employee Code required");
+      if (!name) return alert("Employee Name required");
+      if (!pass) return alert("Employee Password required (for user login)");
+
+      const empRef = ref(window.db, "employees/" + code);
+      const payload = { code, name, dept, route, stop, password: pass, link: link || "" };
+
+      if (!editMode) {
+        // add new
+        set(empRef, payload)
+          .then(() => {
+            alert("Employee added");
+            clearEmpForm();
+          })
+          .catch(err => alert(err));
+      } else {
+        // update (if code changed we must remove old and set new)
+        if (editCodeOriginal && editCodeOriginal !== code) {
+          // remove old and set new
+          remove(ref(window.db, "employees/" + editCodeOriginal))
+            .then(() => set(empRef, payload))
+            .then(() => {
+              alert("Employee updated (code changed)");
+              clearEmpForm();
+              editMode = false;
+              editCodeOriginal = null;
+            })
+            .catch(err => alert(err));
+        } else {
+          update(empRef, payload)
+            .then(() => {
+              alert("Employee updated");
+              clearEmpForm();
+              editMode = false;
+              editCodeOriginal = null;
+            })
+            .catch(err => alert(err));
+        }
+      }
+    };
+
+    function clearEmpForm() {
+      document.getElementById("empCode").value = "";
+      document.getElementById("empName").value = "";
+      document.getElementById("empDept").value = "";
+      document.getElementById("empRoute").value = "";
+      document.getElementById("empStop").value = "";
+      document.getElementById("empPassword").value = "";
+      document.getElementById("empLink").value = "";
+      document.getElementById("saveBtn").innerText = "Save";
+    }
+    window.clearEmpForm = clearEmpForm;
+
+    // ---------- LOAD EMPLOYEES TABLE ----------
+    function loadEmployeeTable() {
+      const tbody = document.getElementById("empTableBody");
+      tbody.innerHTML = "<tr><td colspan='7' class='text-center p-4'>Loading...</td></tr>";
+
+      onValue(ref(window.db, "employees"), snapshot => {
+        tbody.innerHTML = "";
+        if (!snapshot.exists()) {
+          tbody.innerHTML = "<tr><td colspan='7' class='text-center p-4'>No employees found</td></tr>";
+          return;
+        }
+        snapshot.forEach(child => {
+          const e = child.val();
+          const tr = document.createElement("tr");
+          tr.className = "border-b";
+          tr.innerHTML = `
+            <td class="p-2">${escapeHtml(e.code)}</td>
+            <td class="p-2">${escapeHtml(e.name)}</td>
+            <td class="p-2">${escapeHtml(e.dept || "")}</td>
+            <td class="p-2">${escapeHtml(e.route || "")}</td>
+            <td class="p-2">${escapeHtml(e.stop || "")}</td>
+            <td class="p-2">${e.link ? `<a href="${escapeAttr(e.link)}" target="_blank" class="text-blue-600">Link</a>` : "-"}</td>
+            <td class="p-2">
+              <button class="bg-yellow-500 text-white px-2 py-1 rounded mr-2" onclick="editEmployee('${encodeURIComponent(e.code)}')">Edit</button>
+              <button class="bg-red-600 text-white px-2 py-1 rounded" onclick="deleteEmployee('${encodeURIComponent(e.code)}')">Delete</button>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+      });
+    }
+    window.loadEmployeeTable = loadEmployeeTable;
+
+    // ---------- EDIT EMPLOYEE ----------
+    window.editEmployee = async function(codeEncoded) {
+      const code = decodeURIComponent(codeEncoded);
+      const snap = await get(child(ref(window.db), "employees/" + code));
+      if (!snap.exists()) return alert("Employee not found");
+      const e = snap.val();
+      document.getElementById("empCode").value = e.code || "";
+      document.getElementById("empName").value = e.name || "";
+      document.getElementById("empDept").value = e.dept || "";
+      document.getElementById("empRoute").value = e.route || "";
+      document.getElementById("empStop").value = e.stop || "";
+      document.getElementById("empPassword").value = e.password || "";
+      document.getElementById("empLink").value = e.link || "";
+      editMode = true;
+      editCodeOriginal = e.code;
+      document.getElementById("saveBtn").innerText = "Update";
+      showPage("adminPanel");
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+
+    // ---------- DELETE EMPLOYEE ----------
+    window.deleteEmployee = function(codeEncoded) {
+      const code = decodeURIComponent(codeEncoded);
+      if (!confirm("Delete employee " + code + " ?")) return;
+      remove(ref(window.db, "employees/" + code))
+        .then(() => alert("Deleted"))
+        .catch(err => alert(err));
+    };
+
+    // ---------- USER LOGIN ----------
+    window.userLogin = async function() {
+      const code = document.getElementById("userCode").value.trim();
+      const pass = document.getElementById("userPass").value.trim();
+      if (!code || !pass) return alert("Enter code and password");
+
+      const snap = await get(child(ref(window.db), "employees/" + code));
+      if (!snap.exists()) return alert("Employee not found");
+      const e = snap.val();
+
+      if (!e.password || e.password !== pass) return alert("Invalid password");
+
+      // populate pass fields
+      document.getElementById("ticketName").innerText = e.name || "";
+      document.getElementById("ticketCode").innerText = e.code || "";
+      document.getElementById("ticketDept").innerText = e.dept || "";
+      document.getElementById("ticketRoute").innerText = e.route || "";
+      document.getElementById("ticketStop").innerText = e.stop || "";
+      document.getElementById("ticketEmergency").innerText = "02135667000";
+
+      // use provided link if employee has stored pass image link
+      const storedLink = e.link || "";
+      const dashLinkEl = document.getElementById("officialPassImageLink");
+      if (storedLink) {
+        dashLinkEl.href = storedLink;
+        dashLinkEl.classList.remove("hidden");
+      } else {
+        dashLinkEl.classList.add("hidden");
+      }
+
+      const today = new Date();
+      document.getElementById("ticketDate").innerText = `${pad(today.getDate())}-${pad(today.getMonth()+1)}-${today.getFullYear()}`;
+
+      // Show pass preview page
+      showPage("userDashboard");
+      // clear user login
+      document.getElementById("userCode").value = "";
+      document.getElementById("userPass").value = "";
+    };
+
+    // ---------- DOWNLOAD PASS (DOM -> PNG using html2canvas) ----------
+    window.downloadPass = function() {
+      const node = document.getElementById("passCard");
+      // increase scale for better resolution
+      html2canvas(node, { scale: 2 }).then(canvas => {
+        const link = document.createElement("a");
+        link.download = `${document.getElementById("ticketCode").innerText || "buspass"}.png`;
+        link.href = canvas.toDataURL("image/png");
+        link.click();
+      }).catch(err => {
+        alert("Download failed: " + err);
+      });
+    };
+
+    // ---------- UTILS ----------
+    function pad(n){ return n < 10 ? '0'+n : n; }
+    function escapeHtml(s){ if(!s) return ""; return s.toString().replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;"); }
+    function escapeAttr(s){ if(!s) return ""; return s.toString().replaceAll('"','&quot;'); }
+
+    // Expose helper for admin panel to refresh table
+    window.refreshTable = loadEmployeeTable;
+
+    // We'll load table when adminPanel becomes visible via admin login.
+  </script>
+
+  <style>
+    /* Small print/font adjustments to match sample visually */
+    .pass-label { font-weight: 600; }
+    .pass-value { margin-left: 6px; }
+    /* dotted border like sample */
+    .pass-border { border: 3px dotted #000; padding: 10px; }
+  </style>
+</head>
+<body class="bg-gray-100">
+
+  <!-- HEADER -->
+  <div class="bg-blue-700 text-white p-4 text-center text-xl font-bold">
+    BAJAJ AUTO CHAKAN - 1 BUS PASS DOWNLOAD
+  </div>
+
+  <!-- NAV SWITCH -->
+  <div class="flex justify-center gap-4 p-4">
+    <button onclick="showPage('userLoginPage')" class="bg-gray-800 text-white px-4 py-2 rounded">User Login</button>
+    <button onclick="showPage('adminLoginPage')" class="bg-blue-700 text-white px-4 py-2 rounded">Admin Login</button>
+  </div>
+
+  <!-- ========== USER LOGIN PAGE ========== -->
+  <div id="userLoginPage" class="page p-6">
+    <div class="max-w-md mx-auto bg-white p-6 shadow rounded">
+      <h2 class="text-lg font-bold mb-3">Employee Login</h2>
+      <input id="userCode" class="border p-2 w-full mb-3" placeholder="Employee Code" />
+      <input id="userPass" class="border p-2 w-full mb-3" placeholder="Password" type="password" />
+      <button onclick="userLogin()" class="bg-blue-600 text-white w-full py-2 rounded">Login</button>
+    </div>
+  </div>
+
+  <!-- ========== ADMIN LOGIN PAGE ========== -->
+  <div id="adminLoginPage" class="page hidden p-6">
+    <div class="max-w-md mx-auto bg-white p-6 shadow rounded">
+      <h2 class="text-lg font-bold mb-3">Admin Login</h2>
+      <input id="adminUser" class="border p-2 w-full mb-3" placeholder="Username" />
+      <input id="adminPass" class="border p-2 w-full mb-3" placeholder="Password" type="password" />
+      <button onclick="adminLogin()" class="bg-green-600 text-white w-full py-2 rounded">Login</button>
+      <p class="text-sm text-gray-600 mt-3">Admin credentials: <b></b> / <b></b></p>
+    </div>
+  </div>
+
+  <!-- ========== ADMIN PANEL ========== -->
+  <div id="adminPanel" class="page hidden p-6">
+    <h2 class="text-xl font-bold mb-4">Admin Dashboard</h2>
+
+    <div class="bg-white p-5 rounded shadow mb-6">
+      <h3 class="text-lg font-bold mb-3">Add / Edit Employee</h3>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <input id="empCode" placeholder="Employee Code" class="border p-2" />
+        <input id="empName" placeholder="Employee Name" class="border p-2" />
+        <input id="empDept" placeholder="Department" class="border p-2" />
+        <input id="empRoute" placeholder="Bus Route" class="border p-2" />
+        <input id="empStop" placeholder="Bus Stop" class="border p-2" />
+        <input id="empPassword" placeholder="Password (for employee login)" class="border p-2" type="password" />
+        <input id="empLink" placeholder="Optional: Pass Image/Download Link (public URL)" class="border p-2 md:col-span-2" />
+      </div>
+      <div class="mt-3">
+        <button id="saveBtn" onclick="saveEmployee()" class="bg-blue-700 text-white px-4 py-2 rounded">Save</button>
+        <button onclick="clearEmpForm()" class="ml-2 bg-gray-400 text-white px-4 py-2 rounded">Clear</button>
+        <button onclick="loadEmployeeTable()" class="ml-2 bg-green-500 text-white px-4 py-2 rounded">Refresh Table</button>
+      </div>
+    </div>
+
+    <div class="bg-white p-5 rounded shadow">
+      <h3 class="text-lg font-bold mb-3">All Employees</h3>
+      <div class="overflow-x-auto">
+        <table class="w-full border">
+          <thead class="bg-gray-200">
+            <tr>
+              <th class="p-2">Code</th>
+              <th class="p-2">Name</th>
+              <th class="p-2">Dept</th>
+              <th class="p-2">Route</th>
+              <th class="p-2">Stop</th>
+              <th class="p-2">Pass Link</th>
+              <th class="p-2">Action</th>
+            </tr>
+          </thead>
+          <tbody id="empTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== USER DASHBOARD / PASS ========== -->
+  <div id="userDashboard" class="page hidden p-6">
+    <div class="max-w-md mx-auto bg-white p-6 shadow rounded">
+
+      <!-- PASS CARD (this will be captured by html2canvas) -->
+      <div id="passCard" class="pass-border bg-white">
+        <!-- header row -->
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2">
+            <!-- Company logo left (small) -->
+            <img src="Bajaj.png.png" class="w-20" alt="logo" />
+          </div>
+
+          <div class="text-center">
+            <div style="font-weight:700;font-size:14px">BAL CH-1</div>
+          </div>
+
+          <!-- small circle top-right -->
+          <div style="width:48px;height:48px;border:2px solid #000;border-radius:50%"></div>
+        </div>
+
+        <div class="text-center font-bold text-lg mb-1">BUS PASS</div>
+
+        <!-- details area -->
+        <div style="font-size:13px;line-height:1.6">
+          <div><span class="pass-label">Name:-</span> <span id="ticketName" class="pass-value"></span></div>
+          <div><span class="pass-label">Ticket Number:</span> <span id="ticketCode" class="pass-value"></span></div>
+
+          <div style="display:flex; gap:12px; align-items:flex-start;">
+            <div style="min-width:80px;"><span class="pass-label">Dept</span></div>
+            <div><span id="ticketDept"></span></div>
+          </div>
+
+          <div><span class="pass-label">Bus Route:-</span> <span id="ticketRoute" class="pass-value"></span></div>
+          <div><span class="pass-label">Stop:-</span> <span id="ticketStop" class="pass-value"></span></div>
+          <div><span class="pass-label">Date of Issue:-</span> <span id="ticketDate" class="pass-value"></span></div>
+          <div><span class="pass-label">Emergency Gate Contact :-</span> <span id="ticketEmergency" class="pass-value"></span></div>
+
+          <!-- signature on right -->
+          <div style="display:flex; justify-content:flex-end; margin-top:8px;">
+            <!-- Developer requested uploaded file path used here as signature/sample -->
+            <img src="sign.png.jpg" alt="signature" style="width:90px; opacity:0.95; object-fit:contain" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Download and optional original pass image link -->
+      <div class="mt-4 flex gap-2">
+        <button onclick="downloadPass()" class="bg-blue-700 text-white px-4 py-2 rounded w-full">Download Pass (PNG)</button>
+        <a id="officialPassImageLink" class="hidden bg-gray-700 text-white px-4 py-2 rounded inline-flex items-center" target="_blank" href="#">Open Original</a>
+      </div>
+
+      <div class="mt-3 text-sm text-gray-600">
+        Tip: Use "Download Pass" to save as PNG (this captures the pass exactly as shown).
+      </div>
+
+    </div>
+  </div>
+
+</body>
+</html>
